@@ -1,10 +1,10 @@
 from torch import nn
 
 class FeedForwardNet(nn.Module):
-    def __init__(self,d_model,d_ffn):
+    def __init__(self,num_hiddens,d_ffn):
         super().__init__()
-        self.dense1=nn.Linear(d_model,d_ffn)
-        self.dense2=nn.Linear(d_ffn,d_model)
+        self.dense1=nn.Linear(num_hiddens,d_ffn)
+        self.dense2=nn.Linear(d_ffn,num_hiddens)
         self.relu=nn.ReLU()
 
     def forward(self,X):
