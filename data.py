@@ -77,18 +77,18 @@ class WMT14Dataset(IterableDataset):
 
 
 def buffered_shuffle(iterator, buffer_size, seed):
-    random_generator = random.Random(seed)
-    buffer = []
+    random_generator=random.Random(seed)
+    buffer=[]
 
     for item in iterator:
-        if len(buffer) < buffer_size:
+        if len(buffer)<buffer_size:
             buffer.append(item)
             continue
 
-        index = random_generator.randrange(buffer_size)
+        idx=random_generator.randrange(buffer_size)
 
-        yield buffer[index]
-        buffer[index] = item
+        yield buffer[idx]
+        buffer[idx]=item
 
     random_generator.shuffle(buffer)
     yield from buffer
