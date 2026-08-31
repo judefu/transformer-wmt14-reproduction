@@ -27,7 +27,7 @@ MODEL_CONFIGS={
            "dropout":0.3}}
 
 TRAINING_CONFIGS={
-    "tiny":{"max_steps":550,
+    "tiny":{"max_steps":250,
             "warmup_steps":100,
             "max_examples":1000,
             "valid_max_examples":500,
@@ -38,27 +38,29 @@ TRAINING_CONFIGS={
             "log_every_steps":100,
             "save_every_steps":100},
 
-    "base":{"max_steps":100_000,
-            "warmup_steps":4_000,
+    "base":{"max_steps":100000,
+            "warmup_steps":4000,
             "max_examples":None,
             "valid_max_examples":None,
             "max_tokens":256,
-            "buffer_size":10_000,
+            "buffer_size":10000,
             "pool_size":1000,
-            "token_budget":None,
-            "log_every_steps":1000,
-            "save_every_steps":1000},
+            "token_budget":16384,
+            "log_every_steps":100,
+            "save_every_steps":1000,
+            "gradient_accumulation_steps":3},
 
-    "big":{"max_steps":300_000,
-           "warmup_steps":4_000,
+    "big":{"max_steps":300000,
+           "warmup_steps":4000,
            "max_examples":None,
            "valid_max_examples":None,
            "max_tokens":256,
            "buffer_size":10_000,
            "pool_size":1000,
-           "token_budget":None,
-           "log_every_steps":1000,
-           "save_every_steps":1000}}
+           "token_budget":10240,
+           "log_every_steps":100,
+           "save_every_steps":1000,
+           "gradient_accumulation_steps":None}}
 
 def get_training_config(model_size):
     return TRAINING_CONFIGS[model_size].copy()

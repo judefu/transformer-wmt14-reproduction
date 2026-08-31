@@ -2,17 +2,19 @@ import torch
 from pathlib import Path
 
 def save_checkpoint(path,net,optimizer,epoch,global_step,best_validation_nll,
-                    model_config,training_history):
+                    model_config,training_history,epoch_complete=False,batch_offset=0):
     path=Path(path)
     path.parent.mkdir(parents=True,exist_ok=True)
 
     checkpoint_data={"net_state_dict":net.state_dict(),
-                       "optimizer_state_dict":optimizer.state_dict(),
-                       "epoch":epoch,
-                       "global_step":global_step,
-                       "best_validation_nll":best_validation_nll,
-                       "model_config":model_config,
-                       "training_history":training_history}
+                     "optimizer_state_dict":optimizer.state_dict(),
+                     "epoch":epoch,
+                     "global_step":global_step,
+                     "best_validation_nll":best_validation_nll,
+                     "model_config":model_config,
+                     "training_history":training_history,
+                     "epoch_complete":epoch_complete,
+                     "batch_offset":batch_offset}
     torch.save(checkpoint_data,path)
     return path
 
