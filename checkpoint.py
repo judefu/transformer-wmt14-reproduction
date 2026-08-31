@@ -152,3 +152,20 @@ def average_checkpoints(checkpoint_paths,output_path):
     torch.save(averaged_checkpoint,output_path)
 
     return output_path
+
+def main():
+    project_directory=Path(__file__).resolve().parent
+
+    model_size="base"
+    num_checkpoints=5
+
+    history_directory=project_directory/"checkpoints"/"history"
+    output_path=project_directory/"checkpoints"/f"{model_size}_averaged_last_{num_checkpoints}.pt"
+    pattern=(f"{model_size}_checkpoint_epoch_"f"*_step_*.pt")
+    checkpoint_paths=sorted(history_directory.glob(pattern))
+
+    selected_paths=checkpoint_paths[-num_checkpoints:]
+    average_checkpoints(selected_paths,output_path)
+
+if __name__ == "__main__":
+    main()
