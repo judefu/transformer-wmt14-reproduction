@@ -108,20 +108,20 @@ def evaluate_nll(net,dataset,device,pad_id,max_tokens,pool_size,seed):
 
 def main(nll=False):
     project_directory=Path(__file__).resolve().parent
-    data_directory=(Path.home()/"datasets"/"wmt14"/"processed"/"plain")
+    data_directory=Path.home()/"datasets"/"wmt14"/"processed"/"plain"
     tokenizer_path=(project_directory/"vocab"/"wmt14_en_de_bpe_37k.model")
     device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if nll:
         seed=42
-        valid_max_examples=500
-        max_tokens=128
-        token_budget=512
-        pool_size=200
+        valid_max_examples=None
+        max_tokens=256
+        token_budget=4096
+        pool_size=1000
 
         valid_src_path=(data_directory/"valid.en")
         valid_tgt_path=(data_directory/"valid.de")
-        checkpoint_path=(project_directory/"checkpoints"/"averaged_last_2.pt")
+        checkpoint_path=(project_directory/"checkpoints"/"averaged_last_5.pt")
 
         net, tokenizer=load_net(checkpoint_path,tokenizer_path,device)
         valid_dataset=data.WMT14Dataset(valid_src_path,valid_tgt_path,tokenizer,
@@ -136,8 +136,8 @@ def main(nll=False):
         src_path=(data_directory/"valid.en")
         ref_path=(data_directory/"valid.de")
 
-        max_examples=20
-        method="greedy"
+        max_examples=None
+        method="beam"
         max_new_tokens=50
         beam_size=4
         alpha=0.6
