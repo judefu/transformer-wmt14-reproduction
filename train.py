@@ -164,7 +164,7 @@ def main():
             batch_offset=0
         else:
             start_epoch=saved_epoch
-            batch_offset=checkpoint["batch_offset"]
+            batch_offset=checkpoint_data["batch_offset"]
 
         global_step=checkpoint_data["global_step"]
         best_validation_nll=checkpoint_data["best_validation_nll"]
