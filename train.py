@@ -34,6 +34,7 @@ def train_one_epoch(net,dataset,optimizer,device,pad_id,epoch_idx,global_step,
     total_correct=0
     total_tokens=0
     total_step_batches=0
+    step_tokens=0
 
     for idx,examples in enumerate(example_batches):
         if idx<batch_offset:
@@ -50,10 +51,13 @@ def train_one_epoch(net,dataset,optimizer,device,pad_id,epoch_idx,global_step,
         with torch.autocast(device_type=device.type,dtype=torch.bfloat16,enabled=use_bf16):
             logits=net(src_batch,decoder_batch,src_valid_lens)
             l=loss.label_smooth_cross_entropy(logits,label_batch,pad_id,0.1)
-        (l/num_batches).backward()
-        total_step_batches+=1
 
         correct,token_cnt=calculate_token_accuracy(logits,label_batch,pad_id)
+
+        (l*token_cnt).backward()
+        total_step_batches+=1
+        step_tokens+=token_cnt
+
         token_loss+=l.item()*token_cnt
         total_correct+=correct
         total_tokens+=token_cnt
@@ -61,12 +65,17 @@ def train_one_epoch(net,dataset,optimizer,device,pad_id,epoch_idx,global_step,
         if total_step_batches<num_batches:
             continue
 
+        for parameter in net.parameters():
+            if parameter.grad is not None:
+                parameter.grad.div_(step_tokens)
+        
         global_step+=1
         lr=optimize.update_learning_rate(optimizer,global_step,num_hiddens,
                                          warmup_steps)
         optimizer.step()
         optimizer.zero_grad(set_to_none=True)
         total_step_batches=0
+        step_tokens=0
 
         if global_step==1 or global_step%log_every_steps==0:
             log_loss=token_loss/total_tokens
@@ -84,10 +93,9 @@ def train_one_epoch(net,dataset,optimizer,device,pad_id,epoch_idx,global_step,
             break
 
     if total_step_batches>0 and global_step<max_steps:
-        w=num_batches/total_step_batches
         for param in net.parameters():
             if param.grad is not None:
-                param.grad.mul_(w)
+                param.grad.div_(step_tokens)
         global_step+=1
         optimize.update_learning_rate(optimizer,global_step,num_hiddens,warmup_steps)
         optimizer.step()
