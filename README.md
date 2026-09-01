@@ -1,78 +1,134 @@
 # Transformer WMT14 英德翻译复现
 
-这是一个使用PyTorch从基础模块实现Transformer，并在WMT14 English–German平行语料上完成训练、推理和评估的复现项目。其中自行实现了缩放点积注意力、多头注意力、编码器、解码器、位置编码、标签平滑、Noam学习率、动态token batching、断点恢复、beam search和checkpoint averaging。
-本项目最终模型能够生成与源句相关的德语翻译，但测试集得分仍低于原论文。
+这是一个使用 PyTorch 从基础模块实现 Transformer，并在 WMT14 English–German 平行语料上完成训练、推理和评估的复现项目。项目自行实现了注意力、编码器、解码器、位置编码、标签平滑、Noam 学习率、动态 token batching、断点恢复、beam search 和 checkpoint averaging。
+
+最终的 Transformer Base 在 2737 句 `test_filtered` 测试集上取得 **25.05 SacreBLEU**。这一结果来自最后五个模型 checkpoint 的参数平均；同一训练中验证集 NLL 最低的单模型取得 25.03 SacreBLEU。
 
 ## 最终结果
 
-最终模型为Transformer Base，并对epoch 14–18的五个模型checkpoint进行参数平均。
+| 项目 | 最佳单模型 | 最后五个 checkpoint 平均 |
+| --- | ---: | ---: |
+| 优化器更新步数 | 100000 | 78005–100000 |
+| 测试集句数 | 2737 | 2737 |
+| SacreBLEU | **25.03** | **25.05** |
+| 1/2/3/4-gram precision | 56.3/30.7/18.9/12.0 | 56.3/30.7/18.9/12.1 |
+| BP | 1.000 | 1.000 |
+| 输出/参考长度比 | 1.032 | 1.033 |
 
-| 项目 | 结果 |
+100000 步模型在 3000 句验证集上的结果：
+
+| 指标 | 结果 |
 | --- | ---: |
-| 优化器更新步数 | 100000 |
-| 验证集 NLL | 2.3504 |
-| 验证集困惑度 | 10.49 |
-| 验证集 token accuracy | 56.63% |
-| WMT14 `test_filtered` 句数 | 2737 |
-| SacreBLEU | **16.4** |
-| BP / 长度比 | 1.000 / 1.015 |
+| NLL | 1.6884 |
+| 困惑度 | 5.41 |
+| token accuracy | 66.39% |
 
-SacreBLEU 详细结果：
+最终平均模型的完整 SacreBLEU 输出：
 
 ```text
-BLEU = 16.4 48.7/21.6/11.3/6.1
+BLEU = 25.05 56.3/30.7/18.9/12.1
 BP = 1.000
-ratio = 1.015
-hyp_len = 58444
+ratio = 1.033
+hyp_len = 59479
 ref_len = 57579
 nrefs:1|case:mixed|eff:no|tok:13a|smooth:exp|version:2.6.0
 ```
 
-原论文报告的Transformer Base结果为27.3 BLEU，但原论文使用旧式tokenized BLEU，本项目报告的是detokenized SacreBLEU。两者不能直接等同；但即使考虑评估方式差异，本项目与论文结果之间仍存在明显差距。
+评估配置固定为：
+
+```text
+beam_size       4
+length penalty  0.6
+max_new_tokens  256
+tokenizer       SacreBLEU 13a
+```
+
+原论文报告的 Transformer Base 结果为 27.3 BLEU，但原论文采用旧式 tokenized BLEU，本项目报告 detokenized SacreBLEU。由于数据清洗、子词模型和评估协议并不完全相同，两者不能直接作严格数值比较。
+
+## 收敛过程
+
+以下测试数据均使用完整的 2737 句测试集和同一 beam-search 配置：
+
+| checkpoint | global step | 验证集 NLL | SacreBLEU |
+| --- | ---: | ---: | ---: |
+| epoch 8 | 48003 | 1.7643 | 24.07 |
+| epoch 12 | 72004 | 1.7138 | 24.50 |
+| epoch 15 | 90004 | 1.6955 | 24.61 |
+| 最佳单模型 | 100000 | 1.6884 | 25.03 |
+| 最后五个 checkpoint 平均 | 78005–100000 | — | **25.05** |
+
+## 关键训练修正
+
+### 全局打乱平行语料
+
+原始训练文件由多个语料顺序拼接。仅依靠有限缓冲区打乱时，训练会长时间集中在单一语料，并在切换处出现周期性指标波动，并严重影响训练效果。最终实验在训练开始前，对 4508785 个对齐句对执行一次全局打乱，并从 step 0 开始读取 `train.shuffled.en/de`。
+
+### 按有效 token 加权梯度累积
+
+动态 batching 会让不同 micro-batch 的有效目标 token 数不同。每个 micro-batch 的 loss 已经是 token 平均值，因此直接平均多个 micro-batch loss 会让小 batch 与大 batch 获得相同权重。
+
+最终实现按以下方式计算一次优化器更新的梯度：
+
+```text
+step_loss = sum(micro_loss_i * token_count_i) / sum(token_count_i)
+```
+
+对应的核心训练逻辑为：
+
+```python
+(loss * token_count).backward()
+step_tokens += token_count
+
+for parameter in model.parameters():
+    if parameter.grad is not None:
+        parameter.grad.div_(step_tokens)
+```
+
+全局打乱和 token 加权梯度累积是最终训练相对早期失败实验的两个关键调整。早期实验的完整测试集 SacreBLEU 为 16.45；修正后的最终结果上升至 25.05。
 
 ## 实现内容
 
 - 缩放点积注意力与多头注意力
 - 正弦/余弦位置编码
 - Encoder–Decoder Transformer
-- masked self-attention与padding mask
-- 共享词表和SentencePiece BPE
+- masked self-attention 与 padding mask
+- 共享词表和 SentencePiece BPE
 - label smoothing cross entropy
-- Adam优化器与Noam学习率调度
-- 按token数动态组成batch
+- Adam 优化器与 Noam 学习率调度
+- 按 token 数动态组成 batch
 - 长度池排序与缓冲区打乱
-- BF16自动混合精度
-- 梯度累加
-- checkpoint保存和加载
-- epoch中途恢复所需的batch offset
-- greedy decoding与beam search
-- checkpoint参数平均
-- 验证集NLL、困惑度、token accuracy
+- BF16 自动混合精度
+- token 加权梯度累积
+- step 级和 epoch 级 checkpoint
+- epoch 中途恢复所需的 batch offset
+- greedy decoding 与 beam search
+- checkpoint 参数平均
+- 验证集 NLL、困惑度、token accuracy 和 SacreBLEU
 
 ## 项目结构
 
 ```text
 .
-├── attention.py             #缩放点积注意力与多头注意力
-├── encoder.py               #Transformer Encoder
-├── decoder.py               #Transformer Decoder
-├── transformer.py           #完整Encoder–Decoder模型
-├── position.py              #位置编码
-├── addnorm.py               #残差连接、LayerNorm和dropout
-├── feedforwardnet.py        #Position-wise FFN
-├── tokenizer.py             #SentencePiece封装
-├── data.py                  #数据集、缓冲区打乱、动态batching
-├── loss.py                  #标签平滑交叉熵
-├── optimize.py              #Adam与Noam学习率
-├── checkpoint.py            #保存、恢复和checkpoint averaging
-├── inference.py             #greedy decoding与beam search
-├── evaluate.py              #NLL与SacreBLEU 评估
-├── train.py                 #训练入口
-├── config.py                #Tiny、Base、Big配置
+├── attention.py             # 缩放点积注意力与多头注意力
+├── encoder.py               # Transformer Encoder
+├── decoder.py               # Transformer Decoder
+├── transformer.py           # 完整 Encoder–Decoder 模型
+├── position.py              # 位置编码
+├── addnorm.py               # 残差连接、LayerNorm 和 dropout
+├── feedforwardnet.py        # Position-wise FFN
+├── tokenizer.py             # SentencePiece 封装
+├── data.py                  # 数据集、缓冲区打乱、动态 batching
+├── loss.py                  # 标签平滑交叉熵
+├── optimize.py              # Adam 与 Noam 学习率
+├── checkpoint.py            # 保存、恢复和 checkpoint averaging
+├── inference.py             # greedy decoding 与 beam search
+├── evaluate.py              # NLL 与 SacreBLEU 评估
+├── train.py                 # 训练入口
+├── config.py                # Tiny、Base、Big 配置
 ├── scripts/
-│   ├── prepare_eval_data.py #准备验证集和测试集(gpt5.6生成)
-│   ├── shuffle_data.py      #全局打乱平行训练语料(gpt5.6生成)
-│   └── train_tokenizer.py   #训练SentencePiece
+│   ├── prepare_eval_data.py # 准备验证集和测试集(gpt5.6sol完成)
+│   ├── shuffle_data.py      # 全局打乱平行训练语料(gpt5.6sol完成)
+│   └── train_tokenizer.py   # 训练 SentencePiece
 └── vocab/
     ├── wmt14_en_de_bpe_37k.model
     └── wmt14_en_de_bpe_37k.vocab
@@ -80,27 +136,28 @@ nrefs:1|case:mixed|eff:no|tok:13a|smooth:exp|version:2.6.0
 
 ## 环境
 
-最终服务器环境：
+训练先后在两台 NVIDIA A10 实例上断点续训，并全程使用 BF16 autocast：
 
 ```text
-Python        3.11
-PyTorch       2.3.1+cu121
-SentencePiece 0.2.2
-SacreBLEU     2.6.0
-GPU           NVIDIA A10, 22.18 GiB
+Python         3.10 / 3.11
+PyTorch        2.3.1+cu118 / 2.3.1+cu121
+SentencePiece  0.2.2
+SacreBLEU      2.6.0
+GPU            NVIDIA A10, 22–24 GiB
 ```
 
-除PyTorch外的依赖：
+安装除 PyTorch 外的依赖：
 
 ```bash
 python -m pip install sentencepiece==0.2.2 sacrebleu==2.6.0
 ```
 
-PyTorch应根据本机CUDA环境从官方渠道安装。
+PyTorch 应根据本机 CUDA 驱动从官方渠道安装。
 
 ## 数据目录
 
 训练和评估入口默认读取：
+
 ```text
 ~/datasets/wmt14/processed/plain/
 ├── train.en
@@ -116,16 +173,25 @@ PyTorch应根据本机CUDA环境从官方渠道安装。
 ```
 
 其中：
-- `valid.*`：newstest2013，共3000个句对；
-- `test_filtered.*`：常用的WMT14 En–De 2737句测试集；
-- `test_full.*`：恢复后的3003句完整版本；
-- `train.shuffled.*`：对齐句对经过一次全局打乱后的训练语料。
 
-原始 WMT14 数据需要由使用者自行取得。`scripts/prepare_eval_data.py`假定原始开发集与测试集已解压到 `~/datasets/wmt14/extracted/`下的相应目录。
+- `train.shuffled.*`：4508785 个经过同一全局排列的训练句对；
+- `valid.*`：newstest2013，共 3000 个句对；
+- `test_filtered.*`：本项目最终报告使用的 WMT14 En–De 测试集，共 2737 个句对；
+- `test_full.*`：保留的 3003 句版本，不用于最终报告。
 
-## 全局打乱训练语料
+原始 WMT14 数据需要由使用者自行取得。`scripts/prepare_eval_data.py` 假定原始开发集与测试集已解压到 `~/datasets/wmt14/extracted/` 下的相应目录。
 
-原始训练文件由多个语料顺序拼接。只进行有限缓冲区打乱时，训练日志随语料切换表现出有规律的明显波动，并且训练效果极差，因此训练前需要先对英德句对做同一全局排列。
+### 全局打乱脚本
+
+```bash
+python scripts/shuffle_data.py \
+  --src ~/datasets/wmt14/processed/plain/train.en \
+  --tgt ~/datasets/wmt14/processed/plain/train.de \
+  --output-src ~/datasets/wmt14/processed/plain/train.shuffled.en \
+  --output-tgt ~/datasets/wmt14/processed/plain/train.shuffled.de \
+  --seed 42
+```
+当前 Python 脚本会将全部句对载入内存，处理完整 WMT14 训练集时需要数 GB 可用内存。
 
 ## 分词器
 
@@ -135,7 +201,7 @@ PyTorch应根据本机CUDA环境从官方渠道安装。
 vocab/wmt14_en_de_bpe_37k.model
 ```
 
-配置为共享的37000词SentencePiece BPE，特殊token ID为：
+它是共享的 37000 词 SentencePiece BPE，特殊 token ID 为：
 
 ```text
 PAD = 0
@@ -144,9 +210,9 @@ EOS = 2
 UNK = 3
 ```
 
-`scripts/train_tokenizer.py`可用于重新训练分词器。训练完成后，应将生成的`.model` 和 `.vocab`文件放到项目的`vocab/`目录，并保持上述文件名。
+`scripts/train_tokenizer.py` 可用于重新训练分词器。生成的 `.model` 和 `.vocab` 文件需要放在项目的 `vocab/` 目录，并保持上述文件名。
 
-## 模型配置
+## 模型与训练配置
 
 | 配置 | 层数 | 隐藏维度 | FFN 维度 | 注意力头数 | Dropout |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -154,23 +220,25 @@ UNK = 3
 | Base | 6 | 512 | 2048 | 8 | 0.1 |
 | Big | 6 | 1024 | 4096 | 16 | 0.3 |
 
-最终实验使用 Base。Big配置已实现并完成服务器二十万步测试，但受单卡显存、代码架构和计算资源限制，没有作为最终结果模型。
+最终实验使用 Base。Big 配置可运行，但没有用于最终结果。
 
 Base 训练配置：
+
 ```text
-max_steps                  100000
-warmup_steps               4000
-max_sequence_tokens        256
-micro-batch token budget   16384
-gradient accumulation      3
-buffer size                10000
-length pool size           1000
-label smoothing            0.1
-Adam betas                 (0.9, 0.98)
-Adam epsilon               1e-9
+max_steps                    100000
+warmup_steps                 4000
+max_sequence_tokens          256
+micro-batch token budget     16384
+gradient accumulation steps  3
+buffer size                  10000
+length pool size             1000
+label smoothing              0.1
+Adam betas                   (0.9, 0.98)
+Adam epsilon                 1e-9
+random seed                  42
 ```
 
-## 训练
+## 训练与恢复
 
 在 `train.py` 中选择：
 
@@ -183,15 +251,16 @@ model_size = "base"
 ```bash
 python train.py
 ```
-在支持BF16的CUDA GPU上，训练会自动使用BF16 autocast。训练入口会根据`config.py`使用动态token batching和梯度累加。
 
-### 断点恢复
+在支持 BF16 的 CUDA GPU 上，训练会自动启用 BF16 autocast。
 
-如果存在checkpoints/base_last.pt
+如果存在：
 
-`train.py`会自动恢复模型、优化器、epoch、global step、训练历史和epoch内batch offset。`base_last.pt` 用于恢复训练，体积会大于纯模型 checkpoint。
+```text
+checkpoints/base_last.pt
+```
 
-训练过程中生成：
+`train.py` 会自动恢复模型、优化器、epoch、global step、训练历史和 epoch 内 batch offset。训练过程中生成：
 
 ```text
 checkpoints/base_last.pt
@@ -199,18 +268,66 @@ checkpoints/base_best.pt
 checkpoints/history/base_checkpoint_epoch_XXXX_step_XXXXXXXX.pt
 ```
 
-其中 `history/` 下的文件只保存模型参数和必要数据，用于后续平均。
+`base_last.pt` 和 `base_best.pt` 包含优化器状态，可用于恢复；`history/` 下的文件只保存模型参数和必要数据，用于最后参数平均。
 
 ## Checkpoint averaging
 
-最终实验平均最后五个完整 epoch 的模型 checkpoint：epoch 14–18，对应step 77458、83458、89457、95457和100000。平均后的文件只用于推理和评估，不包含可恢复训练所需的完整优化器状态。
+运行：
 
+```bash
+python checkpoint.py
+```
+
+会按照文件名排序，从 `checkpoints/history/` 选择最后五个 Base checkpoint，并生成：
+
+```text
+checkpoints/base_averaged_last_5.pt
+```
+
+最终实验实际平均了：
+
+```text
+epoch 13, step  78005
+epoch 14, step  84005
+epoch 15, step  90004
+epoch 16, step  96005
+epoch 17, step 100000
+```
+
+step 100000 在第 17 次数据遍历中途触发 `max_steps`，因此最后一个文件是终止时 checkpoint，而不是完整遍历训练集后的 checkpoint。平均模型只用于推理和评估，不包含恢复训练所需的优化器状态。
+
+## 评估
+
+将最终平均模型放在：
+
+```text
+checkpoints/base_averaged_last_5.pt
+```
+
+在 `evaluate.py` 中设置：
+
+```python
+checkpoint_path = project_directory / "checkpoints" / "base_averaged_last_5.pt"
+src_path = data_directory / "test_filtered.en"
+ref_path = data_directory / "test_filtered.de"
+
+max_examples = None
+method = "beam"
+max_new_tokens = 256
+beam_size = 4
+alpha = 0.6
+```
+
+运行完整测试集评估：
+
+```bash
+python evaluate.py
+```
 
 ## 实验说明与局限
 
-1. 最终训练运行的前七个epoch使用了按语料拼接的原始训练顺序。发现语料切换引起的周期性指标波动后，从后续epoch开始改用全局打乱语料；最终代码从训练开始就读取`train.shuffled.en/de`。
-2. SentencePiece BPE与原论文的数据预处理实现并不完全相同。
-3. 最终实验使用单张NVIDIA A10，而原论文使用多GPU和更大的训练资源。
-4. 当前beam search没有实现KV cache，影响推理速度，但不影响训练时间。
-5. 本项目的SacreBLEU与原论文tokenized BLEU评估协议不同，不能直接对比。
-6. 最终16.4 SacreBLEU表明模型已经学习到有效的源句到目标句映射，但尚未达到论文报告的翻译质量。
+1. SentencePiece BPE、语料清洗和训练数据组成与原论文的数据流水线并不完全相同。
+2. 本项目使用单张 NVIDIA A10，并通过梯度累积扩大每次优化器更新覆盖的 token 数；原论文使用多 GPU 训练。
+3. 当前 beam search 没有实现 KV cache，因此推理速度较慢，但不会改变训练结果或解码语义。
+4. 最终报告使用 detokenized SacreBLEU 13a，与原论文的旧式 tokenized BLEU 不能直接严格比较。
+5. 最终结果基于本项目固定的 2737 句 `test_filtered` 集；更换数据版本或预处理方式会改变分数。
